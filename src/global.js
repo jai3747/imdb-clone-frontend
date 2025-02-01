@@ -1,1 +1,1 @@
-export const backend_API = "http://localhost:5000"
+export const backend_API = "http://34.93.14.21:5000"
