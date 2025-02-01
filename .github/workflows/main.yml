@@ -1,89 +1,106 @@
-const express = require("express");
-const mongoose = require("mongoose");
-require('dotenv').config();
-const movieRouter = require("./routes/movie");
-const actorRouter = require("./routes/actor");
-const producerRouter = require("./routes/producer");
-const cors = require("cors");
+name: Docker Build and Push Pipeline
 
-const app = express();
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
-// Print version/build info on startup
-const buildVersion = process.env.BUILD_VERSION || 'development';
-console.log(`Starting IMDB API Server - Version: ${buildVersion}`);
+env:
+  DOCKER_TAG: ${{ github.sha }}
+  NODE_VERSION: '18'
+  BUILD_VERSION: v${{ github.run_number }}  # Adds automatic version numbering
 
-// CORS configuration - Fixed quotes around all methods
-app.use(cors({
-  origin: ['http://34.93.14.21:3000', 'http://localhost:3000'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
-}));
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-app.use(express.json());
-
-// Root endpoint with version info
-app.get('/', (req, res) => {
-  res.status(200).json({ 
-    message: 'IMDB API Server Running',
-    version: buildVersion
-  });
-});
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy',
-    version: buildVersion
-  });
-});
-
-app.use("/api/movies", movieRouter);
-app.use("/api/actors", actorRouter);
-app.use("/api/producers", producerRouter);
-
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://jayachandran:jc@3747@jai@cluster0.w45he.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
-
-const connectDB = async (retries = 5) => {
-  while (retries) {
-    try {
-      await mongoose.connect(MONGO_URI, {
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 20000,
-      });
-      console.log("DB connected successfully");
-      return true;
-    } catch (err) {
-      console.error("MongoDB connection error:", err.message);
-      retries -= 1;
-      if (retries === 0) {
-        console.error("Max retries reached. Exiting...");
-        return false;
-      }
-      console.log(`Retrying connection... (${retries} attempts remaining)`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    }
-  }
-  return false;
-};
-
-const PORT = process.env.PORT || 5000;
-
-const startServer = async () => {
-  try {
-    const isConnected = await connectDB();
-    if (!isConnected) {
-      console.error("Failed to connect to MongoDB. Server will not start.");
-      process.exit(1);
-    }
+jobs:
+  docker-build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - component: frontend
+            repo: jai3747/imdb-clone-frontend
+          - component: backend
+            repo: jai3747/imdb-clone-backend
+      fail-fast: false
     
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`App is listening on port ${PORT}`);
-      console.log(`Version: ${buildVersion}`);
-    });
-  } catch (err) {
-    console.error('Failed to start server:', err);
-    process.exit(1);
-  }
-};
+    steps:
+      # Clean workspace first
+      - name: Clean workspace
+        run: |
+          rm -rf workspace
+          rm -rf /tmp/.buildx-cache
+          rm -rf /tmp/.buildx-cache-new
+          echo "Cleaned workspace and cache directories"
 
-startServer();
+      - name: Create fresh workspace directory
+        run: |
+          mkdir -p workspace
+          echo "Created fresh workspace directory"
+
+      # Fresh checkout
+      - name: Checkout Component Repository
+        uses: actions/checkout@v4.1.1
+        with:
+          repository: ${{ matrix.repo }}
+          path: workspace/${{ matrix.component }}
+          fetch-depth: 0
+          clean: true  # Ensures clean checkout
+          token: ${{ secrets.REPO_TOKEN }}
+
+      # Print build information
+      - name: Print Build Info
+        run: |
+          echo "Building ${{ matrix.component }} version ${{ env.BUILD_VERSION }}"
+          echo "Commit SHA: ${{ env.DOCKER_TAG }}"
+          echo "Build directory contents:"
+          ls -la workspace/${{ matrix.component }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Create new cache for this build
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ matrix.component }}-${{ github.sha }}-${{ github.run_number }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ matrix.component }}-
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./workspace/${{ matrix.component }}
+          file: ./workspace/${{ matrix.component }}/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.DOCKER_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.BUILD_VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            BUILD_VERSION=${{ env.BUILD_VERSION }}
+
+      # Clean up after build
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up build artifacts and cache..."
+          rm -rf workspace
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+          echo "Cleanup completed"
