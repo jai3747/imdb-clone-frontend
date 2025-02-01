@@ -1,4 +1,84 @@
+# name: Docker Build and Push Pipeline
+# on:
+#   workflow_dispatch:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+#     types: [opened, synchronize, reopened]
+
+# env:
+#   DOCKER_TAG: ${{ github.sha }}
+#   NODE_VERSION: '18'
+
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref }}
+#   cancel-in-progress: true
+
+# jobs:
+#   docker-build-push:
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         include:
+#           - component: frontend
+#             repo: jai3747/imdb-clone-frontend
+#           - component: backend
+#             repo: jai3747/imdb-clone-backend
+#       fail-fast: false
+    
+#     steps:
+#       - name: Checkout Main Repository
+#         uses: actions/checkout@v4.1.1
+#         with:
+#           token: ${{ secrets.REPO_TOKEN }}
+
+#       - name: Checkout Component Repository
+#         uses: actions/checkout@v4.1.1
+#         with:
+#           repository: ${{ matrix.repo }}
+#           path: ${{ matrix.component }}
+#           fetch-depth: 0
+#           token: ${{ secrets.REPO_TOKEN }}
+
+#       - name: Cache Docker layers
+#         uses: actions/cache@v3
+#         with:
+#           path: /tmp/.buildx-cache
+#           key: ${{ runner.os }}-buildx-${{ matrix.component }}-${{ github.sha }}
+#           restore-keys: |
+#             ${{ runner.os }}-buildx-${{ matrix.component }}-
+
+#       - name: Set up Docker Buildx
+#         uses: docker/setup-buildx-action@v3
+
+#       - name: Login to DockerHub
+#         uses: docker/login-action@v3
+#         with:
+#           username: ${{ secrets.DOCKERHUB_USERNAME }}
+#           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+#       - name: Build and Push Docker Image
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: ./${{ matrix.component }}
+#           file: ./${{ matrix.component }}/Dockerfile
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.DOCKER_TAG }}
+#             ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:latest
+#           cache-from: type=local,src=/tmp/.buildx-cache
+#           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+#           build-args: |
+#             NODE_VERSION=${{ env.NODE_VERSION }}
+
+#       # Temp fix for https://github.com/docker/build-push-action/issues/252
+#       - name: Move cache
+#         run: |
+#           rm -rf /tmp/.buildx-cache
+#           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 name: Docker Build and Push Pipeline
+
 on:
   workflow_dispatch:
   push:
@@ -28,16 +108,14 @@ jobs:
       fail-fast: false
     
     steps:
-      - name: Checkout Main Repository
-        uses: actions/checkout@v4.1.1
-        with:
-          token: ${{ secrets.REPO_TOKEN }}
+      - name: Create workspace directory
+        run: mkdir -p workspace
 
       - name: Checkout Component Repository
         uses: actions/checkout@v4.1.1
         with:
           repository: ${{ matrix.repo }}
-          path: ${{ matrix.component }}
+          path: workspace/${{ matrix.component }}
           fetch-depth: 0
           token: ${{ secrets.REPO_TOKEN }}
 
@@ -61,8 +139,8 @@ jobs:
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: ./${{ matrix.component }}
-          file: ./${{ matrix.component }}/Dockerfile
+          context: ./workspace/${{ matrix.component }}
+          file: ./workspace/${{ matrix.component }}/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.DOCKER_TAG }}
@@ -72,7 +150,6 @@ jobs:
           build-args: |
             NODE_VERSION=${{ env.NODE_VERSION }}
 
-      # Temp fix for https://github.com/docker/build-push-action/issues/252
       - name: Move cache
         run: |
           rm -rf /tmp/.buildx-cache
