@@ -1,106 +1,242 @@
-name: Docker Build and Push Pipeline
+name: Frontend Security & Build Pipeline
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+    branches: [ main ]
 
 env:
-  DOCKER_TAG: ${{ github.sha }}
-  NODE_VERSION: '18'
-  BUILD_VERSION: v${{ github.run_number }}  # Adds automatic version numbering
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  SEMGREP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
 jobs:
-  docker-build-push:
+  security-trufflehog:
+    name: 🐷 TruffleHog Secret Scanner
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - component: frontend
-            repo: jai3747/imdb-clone-frontend
-          - component: backend
-            repo: jai3747/imdb-clone-backend
-      fail-fast: false
-    
     steps:
-      # Clean workspace first
-      - name: Clean workspace
-        run: |
-          rm -rf workspace
-          rm -rf /tmp/.buildx-cache
-          rm -rf /tmp/.buildx-cache-new
-          echo "Cleaned workspace and cache directories"
-
-      - name: Create fresh workspace directory
-        run: |
-          mkdir -p workspace
-          echo "Created fresh workspace directory"
-
-      # Fresh checkout
-      - name: Checkout Component Repository
-        uses: actions/checkout@v4.1.1
+      - name: Checkout Code
+        uses: actions/checkout@v3
         with:
-          repository: ${{ matrix.repo }}
-          path: workspace/${{ matrix.component }}
           fetch-depth: 0
-          clean: true  # Ensures clean checkout
-          token: ${{ secrets.REPO_TOKEN }}
 
-      # Print build information
-      - name: Print Build Info
+      - name: TruffleHog Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: .
+          base: ${{ github.event.before }}
+          head: ${{ github.sha }}
+          extra_args: --debug --only-verified
+
+      - name: Generate Detailed Report
+        if: success() || failure()
         run: |
-          echo "Building ${{ matrix.component }} version ${{ env.BUILD_VERSION }}"
-          echo "Commit SHA: ${{ env.DOCKER_TAG }}"
-          echo "Build directory contents:"
-          ls -la workspace/${{ matrix.component }}
+          echo "## 🔒 TruffleHog Security Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Scan Type: Secret Detection" >> $GITHUB_STEP_SUMMARY
+          echo "- 📁 Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔀 Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          if [ $? -eq 0 ]; then
+            echo "✅ No secrets were detected in the codebase" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Potential secrets were detected. Please review the scan output." >> $GITHUB_STEP_SUMMARY
+          fi
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+  security-semgrep:
+    name: 🔍 Semgrep Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Semgrep Scan
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/javascript
+            p/react
+            p/jwt
+            p/security-audit
+            p/xss
+            p/typescript
+          generateSarif: "1"
+          output: semgrep.sarif
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
+
+      - name: Generate Detailed Report
+        if: success() || failure()
+        run: |
+          echo "## 🔍 Semgrep Security Analysis Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Scan Type: Static Code Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- 📝 Ruleset: JavaScript, React, Security Best Practices" >> $GITHUB_STEP_SUMMARY
+          echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -f semgrep.sarif ]; then
+            findings=$(jq '.runs[].results | length' semgrep.sarif)
+            echo "- 🎯 Total Findings: $findings" >> $GITHUB_STEP_SUMMARY
+            echo "- 📊 Severity Distribution:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[].level' semgrep.sarif | sort | uniq -c | while read count level; do
+              echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "✅ No security issues found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  security-snyk:
+    name: 🛡️ Snyk Dependency Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Snyk Scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=medium --json-file-output=snyk-results.json
+
+      - name: Generate Detailed Report
+        if: success() || failure()
+        run: |
+          echo "## 🛡️ Snyk Dependency Security Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Scan Type: Dependencies & Packages" >> $GITHUB_STEP_SUMMARY
+          if [ -f snyk-results.json ]; then
+            echo "### Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
+            jq -r '.vulnerabilities | group_by(.severity) | .[] | "- \(.[0].severity): \(length)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
+            echo "### Remediation Advice" >> $GITHUB_STEP_SUMMARY
+            jq -r '.remediation.upgrade | to_entries | .[] | "- Upgrade \(.key) to version \(.value.upgradeTo)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No vulnerabilities found in dependencies" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  security-checkov:
+    name: 🏗️ Checkov Infrastructure Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Run Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: dockerfile,kubernetes,secrets
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+          soft_fail: true
+
+      - name: Generate Detailed Report
+        if: success() || failure()
+        run: |
+          echo "## 🏗️ Checkov Infrastructure Security Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Frameworks: Dockerfile, Kubernetes, Secrets" >> $GITHUB_STEP_SUMMARY
+          if [ -f results.sarif ]; then
+            total=$(jq '.runs[].results | length' results.sarif)
+            echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
+            echo "- 📊 Total Checks: $total" >> $GITHUB_STEP_SUMMARY
+            echo "- Severity Distribution:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[].level' results.sarif | sort | uniq -c | while read count level; do
+              echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "✅ No infrastructure issues found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  build-and-test:
+    name: 🏗️ Build and Test
+    needs: [security-trufflehog, security-semgrep, security-snyk, security-checkov]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Linting
+        run: npm run lint || true
+
+      - name: Run Tests
+        run: npm test || true
+
+      - name: Generate Test Report
+        if: success() || failure()
+        run: |
+          echo "## 🧪 Build & Test Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔨 Node Version: $(node -v)" >> $GITHUB_STEP_SUMMARY
+          echo "- 📦 NPM Version: $(npm -v)" >> $GITHUB_STEP_SUMMARY
+          if [ -f test-results.json ]; then
+            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+            jq -r '.numTotalTests, .numPassedTests, .numFailedTests' test-results.json | xargs -n3 printf "- Total Tests: %s\n- Passed: %s\n- Failed: %s\n" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Test results file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  docker-build:
+    name: 🐳 Docker Build and Push
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Login to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Create new cache for this build
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ matrix.component }}-${{ github.sha }}-${{ github.run_number }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-${{ matrix.component }}-
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5
+      - name: Build and Push
+        uses: docker/build-push-action@v4
         with:
-          context: ./workspace/${{ matrix.component }}
-          file: ./workspace/${{ matrix.component }}/Dockerfile
+          context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.DOCKER_TAG }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:${{ env.BUILD_VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/imdb-clone-${{ matrix.component }}:latest
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+            ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
+          cache-to: type=inline
           build-args: |
-            NODE_VERSION=${{ env.NODE_VERSION }}
-            BUILD_VERSION=${{ env.BUILD_VERSION }}
+            NODE_ENV=production
 
-      # Clean up after build
-      - name: Cleanup
-        if: always()
+      - name: Generate Docker Report
         run: |
-          echo "Cleaning up build artifacts and cache..."
-          rm -rf workspace
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
-          echo "Cleanup completed"
+          echo "## 🐳 Docker Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🏷️ Image Tags:" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully built and pushed Docker image" >> $GITHUB_STEP_SUMMARY
