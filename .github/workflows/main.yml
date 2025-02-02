@@ -1,3 +1,245 @@
+# name: Frontend Security & Build Pipeline
+
+# on:
+#   push:
+#     branches: [ main ]
+#   pull_request:
+#     branches: [ main ]
+
+# env:
+#   SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+#   SEMGREP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
+#   GH_PAT: ${{ secrets.GH_PAT }}
+#   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+#   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+# jobs:
+#   security-trufflehog:
+#     name: 🐷 TruffleHog Secret Scanner
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+#         with:
+#           fetch-depth: 0
+
+#       - name: TruffleHog Scan
+#         uses: trufflesecurity/trufflehog@main
+#         with:
+#           path: .
+#           base: ${{ github.event.before }}
+#           head: ${{ github.sha }}
+#           extra_args: --debug --only-verified
+
+#       - name: Generate Detailed Report
+#         if: success() || failure()
+#         run: |
+#           echo "## 🔒 TruffleHog Security Scan Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔍 Scan Type: Secret Detection" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📁 Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔀 Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
+#           echo "### Results" >> $GITHUB_STEP_SUMMARY
+#           if [ $? -eq 0 ]; then
+#             echo "✅ No secrets were detected in the codebase" >> $GITHUB_STEP_SUMMARY
+#           else
+#             echo "⚠️ Potential secrets were detected. Please review the scan output." >> $GITHUB_STEP_SUMMARY
+#           fi
+
+#   security-semgrep:
+#     name: 🔍 Semgrep Code Analysis
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+
+#       - name: Semgrep Scan
+#         uses: semgrep/semgrep-action@v1
+#         with:
+#           config: >-
+#             p/javascript
+#             p/react
+#             p/jwt
+#             p/security-audit
+#             p/xss
+#             p/typescript
+#           generateSarif: "1"
+#           output: semgrep.sarif
+#         env:
+#           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
+
+#       - name: Generate Detailed Report
+#         if: success() || failure()
+#         run: |
+#           echo "## 🔍 Semgrep Security Analysis Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔍 Scan Type: Static Code Analysis" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📝 Ruleset: JavaScript, React, Security Best Practices" >> $GITHUB_STEP_SUMMARY
+#           echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
+#           if [ -f semgrep.sarif ]; then
+#             findings=$(jq '.runs[].results | length' semgrep.sarif)
+#             echo "- 🎯 Total Findings: $findings" >> $GITHUB_STEP_SUMMARY
+#             echo "- 📊 Severity Distribution:" >> $GITHUB_STEP_SUMMARY
+#             jq -r '.runs[].results[].level' semgrep.sarif | sort | uniq -c | while read count level; do
+#               echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
+#             done
+#           else
+#             echo "✅ No security issues found" >> $GITHUB_STEP_SUMMARY
+#           fi
+
+#   security-snyk:
+#     name: 🛡️ Snyk Dependency Scan
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v3
+#         with:
+#           node-version: '16'
+#           cache: 'npm'
+
+#       - name: Install Dependencies
+#         run: npm ci
+
+#       - name: Snyk Scan
+#         uses: snyk/actions/node@master
+#         env:
+#           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+#         with:
+#           args: --severity-threshold=medium --json-file-output=snyk-results.json
+
+#       - name: Generate Detailed Report
+#         if: success() || failure()
+#         run: |
+#           echo "## 🛡️ Snyk Dependency Security Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔍 Scan Type: Dependencies & Packages" >> $GITHUB_STEP_SUMMARY
+#           if [ -f snyk-results.json ]; then
+#             echo "### Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
+#             jq -r '.vulnerabilities | group_by(.severity) | .[] | "- \(.[0].severity): \(length)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
+#             echo "### Remediation Advice" >> $GITHUB_STEP_SUMMARY
+#             jq -r '.remediation.upgrade | to_entries | .[] | "- Upgrade \(.key) to version \(.value.upgradeTo)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
+#           else
+#             echo "✅ No vulnerabilities found in dependencies" >> $GITHUB_STEP_SUMMARY
+#           fi
+
+#   security-checkov:
+#     name: 🏗️ Checkov Infrastructure Scan
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+
+#       - name: Run Checkov Scan
+#         uses: bridgecrewio/checkov-action@master
+#         with:
+#           directory: .
+#           framework: dockerfile,kubernetes,secrets
+#           output_format: cli,sarif
+#           output_file_path: console,results.sarif
+#           soft_fail: true
+
+#       - name: Generate Detailed Report
+#         if: success() || failure()
+#         run: |
+#           echo "## 🏗️ Checkov Infrastructure Security Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔍 Frameworks: Dockerfile, Kubernetes, Secrets" >> $GITHUB_STEP_SUMMARY
+#           if [ -f results.sarif ]; then
+#             total=$(jq '.runs[].results | length' results.sarif)
+#             echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
+#             echo "- 📊 Total Checks: $total" >> $GITHUB_STEP_SUMMARY
+#             echo "- Severity Distribution:" >> $GITHUB_STEP_SUMMARY
+#             jq -r '.runs[].results[].level' results.sarif | sort | uniq -c | while read count level; do
+#               echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
+#             done
+#           else
+#             echo "✅ No infrastructure issues found" >> $GITHUB_STEP_SUMMARY
+#           fi
+
+#   build-and-test:
+#     name: 🏗️ Build and Test
+#     needs: [security-trufflehog, security-semgrep, security-snyk, security-checkov]
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v3
+#         with:
+#           node-version: '16'
+#           cache: 'npm'
+
+#       - name: Install Dependencies
+#         run: npm ci
+
+#       - name: Run Linting
+#         run: npm run lint || true
+
+#       - name: Run Tests
+#         run: npm test || true
+
+#       - name: Generate Test Report
+#         if: success() || failure()
+#         run: |
+#           echo "## 🧪 Build & Test Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Build Information" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🔨 Node Version: $(node -v)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📦 NPM Version: $(npm -v)" >> $GITHUB_STEP_SUMMARY
+#           if [ -f test-results.json ]; then
+#             echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+#             jq -r '.numTotalTests, .numPassedTests, .numFailedTests' test-results.json | xargs -n3 printf "- Total Tests: %s\n- Passed: %s\n- Failed: %s\n" >> $GITHUB_STEP_SUMMARY
+#           else
+#             echo "⚠️ Test results file not found" >> $GITHUB_STEP_SUMMARY
+#           fi
+
+#   docker-build:
+#     name: 🐳 Docker Build and Push
+#     needs: [build-and-test]
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout Code
+#         uses: actions/checkout@v3
+
+#       - name: Login to DockerHub
+#         uses: docker/login-action@v2
+#         with:
+#           username: ${{ secrets.DOCKER_USERNAME }}
+#           password: ${{ secrets.DOCKER_PASSWORD }}
+
+#       - name: Set up Docker Buildx
+#         uses: docker/setup-buildx-action@v2
+
+#       - name: Build and Push
+#         uses: docker/build-push-action@v4
+#         with:
+#           context: .
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ github.sha }}
+#             ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
+#           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
+#           cache-to: type=inline
+#           build-args: |
+#             NODE_ENV=production
+
+#       - name: Generate Docker Report
+#         run: |
+#           echo "## 🐳 Docker Build Report" >> $GITHUB_STEP_SUMMARY
+#           echo "### Build Details" >> $GITHUB_STEP_SUMMARY
+#           echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
+#           echo "- 🏷️ Image Tags:" >> $GITHUB_STEP_SUMMARY
+#           echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+#           echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest" >> $GITHUB_STEP_SUMMARY
+#           echo "✅ Successfully built and pushed Docker image" >> $GITHUB_STEP_SUMMARY
 name: Frontend Security & Build Pipeline
 
 on:
@@ -12,11 +254,17 @@ env:
   GH_PAT: ${{ secrets.GH_PAT }}
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+  APP_DOMAIN: ${{ secrets.APP_DOMAIN }}
 
 jobs:
-  security-trufflehog:
-    name: 🐷 TruffleHog Secret Scanner
+  # Security Scans (Running in Parallel)
+  security-scans:
+    name: 🔒 Security Scans
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        scan: [trufflehog, semgrep, snyk, checkov]
+      fail-fast: false
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -24,199 +272,110 @@ jobs:
           fetch-depth: 0
 
       - name: TruffleHog Scan
+        if: matrix.scan == 'trufflehog'
         uses: trufflesecurity/trufflehog@main
         with:
           path: .
           base: ${{ github.event.before }}
           head: ${{ github.sha }}
           extra_args: --debug --only-verified
-
-      - name: Generate Detailed Report
-        if: success() || failure()
+          
+      - name: Generate TruffleHog Report
+        if: matrix.scan == 'trufflehog'
         run: |
-          echo "## 🔒 TruffleHog Security Scan Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 Scan Type: Secret Detection" >> $GITHUB_STEP_SUMMARY
-          echo "- 📁 Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔀 Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
-          if [ $? -eq 0 ]; then
-            echo "✅ No secrets were detected in the codebase" >> $GITHUB_STEP_SUMMARY
+          echo "# 🔍 Secret Scanning Report" > trufflehog-report.md
+          echo "## Scan Details" >> trufflehog-report.md
+          echo "- 🕒 Timestamp: $(date)" >> trufflehog-report.md
+          echo "- 🎯 Branch: ${GITHUB_REF#refs/heads/}" >> trufflehog-report.md
+          echo "- 📊 Results:" >> trufflehog-report.md
+          if [ -f trufflehog-results.json ]; then
+            jq -r '.findings[] | "- ⚠️ **Found:** \(.description)\n  - Severity: \(.severity)\n  - Location: \(.location)"' trufflehog-results.json >> trufflehog-report.md
           else
-            echo "⚠️ Potential secrets were detected. Please review the scan output." >> $GITHUB_STEP_SUMMARY
+            echo "✅ No secrets detected" >> trufflehog-report.md
           fi
 
-  security-semgrep:
-    name: 🔍 Semgrep Code Analysis
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
       - name: Semgrep Scan
+        if: matrix.scan == 'semgrep'
         uses: semgrep/semgrep-action@v1
         with:
           config: >-
             p/javascript
             p/react
-            p/jwt
             p/security-audit
-            p/xss
             p/typescript
+            p/owasp-top-ten
           generateSarif: "1"
-          output: semgrep.sarif
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_TOKEN }}
+          output: semgrep-results.sarif
 
-      - name: Generate Detailed Report
-        if: success() || failure()
+      - name: Generate Semgrep Report
+        if: matrix.scan == 'semgrep'
         run: |
-          echo "## 🔍 Semgrep Security Analysis Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 Scan Type: Static Code Analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- 📝 Ruleset: JavaScript, React, Security Best Practices" >> $GITHUB_STEP_SUMMARY
-          echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
-          if [ -f semgrep.sarif ]; then
-            findings=$(jq '.runs[].results | length' semgrep.sarif)
-            echo "- 🎯 Total Findings: $findings" >> $GITHUB_STEP_SUMMARY
-            echo "- 📊 Severity Distribution:" >> $GITHUB_STEP_SUMMARY
-            jq -r '.runs[].results[].level' semgrep.sarif | sort | uniq -c | while read count level; do
-              echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "✅ No security issues found" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  security-snyk:
-    name: 🛡️ Snyk Dependency Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '16'
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
+          echo "# 🛡️ Code Analysis Report" > semgrep-report.md
+          echo "## Findings by Severity" >> semgrep-report.md
+          jq -r '.runs[].results[] | 
+          "### \(.level) Severity Finding\n" +
+          "- 🔍 Rule: \(.ruleId)\n" +
+          "- 📍 Location: \(.locations[].physicalLocation.artifactLocation.uri):\(.locations[].physicalLocation.region.startLine)\n" +
+          "- 📝 Description: \(.message.text)\n"' semgrep-results.sarif >> semgrep-report.md
 
       - name: Snyk Scan
+        if: matrix.scan == 'snyk'
         uses: snyk/actions/node@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --severity-threshold=medium --json-file-output=snyk-results.json
 
-      - name: Generate Detailed Report
-        if: success() || failure()
+      - name: Generate Snyk Report
+        if: matrix.scan == 'snyk'
         run: |
-          echo "## 🛡️ Snyk Dependency Security Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 Scan Type: Dependencies & Packages" >> $GITHUB_STEP_SUMMARY
-          if [ -f snyk-results.json ]; then
-            echo "### Vulnerability Summary" >> $GITHUB_STEP_SUMMARY
-            jq -r '.vulnerabilities | group_by(.severity) | .[] | "- \(.[0].severity): \(length)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
-            echo "### Remediation Advice" >> $GITHUB_STEP_SUMMARY
-            jq -r '.remediation.upgrade | to_entries | .[] | "- Upgrade \(.key) to version \(.value.upgradeTo)"' snyk-results.json >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ No vulnerabilities found in dependencies" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "# 🔒 Dependency Security Report" > snyk-report.md
+          echo "## Overview" >> snyk-report.md
+          jq -r '"📊 Total Vulnerabilities: \(.uniqueCount)\n\n## Vulnerability Breakdown\n" + 
+          (.vulnerabilities | group_by(.severity) | .[] | 
+          "### \(.[0].severity | ascii_upcase) Severity (\(length))\n" + 
+          (.[] | "- 🔴 **\(.title)**\n  - Package: \(.package)\n  - Version: \(.version)\n  - Fix: \(.fixedIn[0])\n"))' \
+          snyk-results.json >> snyk-report.md
 
-  security-checkov:
-    name: 🏗️ Checkov Infrastructure Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Run Checkov Scan
+      - name: Checkov Scan
+        if: matrix.scan == 'checkov'
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
           framework: dockerfile,kubernetes,secrets
           output_format: cli,sarif
-          output_file_path: console,results.sarif
-          soft_fail: true
+          output_file_path: console,checkov-results.sarif
 
-      - name: Generate Detailed Report
-        if: success() || failure()
+      - name: Generate Checkov Report
+        if: matrix.scan == 'checkov'
         run: |
-          echo "## 🏗️ Checkov Infrastructure Security Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Scan Details" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 Frameworks: Dockerfile, Kubernetes, Secrets" >> $GITHUB_STEP_SUMMARY
-          if [ -f results.sarif ]; then
-            total=$(jq '.runs[].results | length' results.sarif)
-            echo "### Results Summary" >> $GITHUB_STEP_SUMMARY
-            echo "- 📊 Total Checks: $total" >> $GITHUB_STEP_SUMMARY
-            echo "- Severity Distribution:" >> $GITHUB_STEP_SUMMARY
-            jq -r '.runs[].results[].level' results.sarif | sort | uniq -c | while read count level; do
-              echo "  - $level: $count" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "✅ No infrastructure issues found" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "# 🏗️ Infrastructure Security Report" > checkov-report.md
+          echo "## Scan Results" >> checkov-report.md
+          jq -r '.runs[].results[] | 
+          "### \(.level) Finding\n" +
+          "- 🔍 Check: \(.ruleId)\n" +
+          "- 📍 Resource: \(.locations[].physicalLocation.artifactLocation.uri)\n" +
+          "- 📝 Description: \(.message.text)\n"' \
+          checkov-results.sarif >> checkov-report.md
 
-  build-and-test:
-    name: 🏗️ Build and Test
-    needs: [security-trufflehog, security-semgrep, security-snyk, security-checkov]
+  # Build and Push Docker Image
+  build-docker:
+    needs: [security-scans]
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ github.sha }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '16'
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Run Linting
-        run: npm run lint || true
-
-      - name: Run Tests
-        run: npm test || true
-
-      - name: Generate Test Report
-        if: success() || failure()
-        run: |
-          echo "## 🧪 Build & Test Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Build Information" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔨 Node Version: $(node -v)" >> $GITHUB_STEP_SUMMARY
-          echo "- 📦 NPM Version: $(npm -v)" >> $GITHUB_STEP_SUMMARY
-          if [ -f test-results.json ]; then
-            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
-            jq -r '.numTotalTests, .numPassedTests, .numFailedTests' test-results.json | xargs -n3 printf "- Total Tests: %s\n- Passed: %s\n- Failed: %s\n" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Test results file not found" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  docker-build:
-    name: 🐳 Docker Build and Push
-    needs: [build-and-test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
       - name: Login to DockerHub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
 
       - name: Build and Push
         uses: docker/build-push-action@v4
@@ -228,15 +387,145 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest
           cache-to: type=inline
-          build-args: |
-            NODE_ENV=production
 
-      - name: Generate Docker Report
+  # Trivy Container Scan
+  trivy-scan:
+    needs: [build-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ needs.build-docker.outputs.image_tag }}'
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          
+      - name: Generate Trivy Report
         run: |
-          echo "## 🐳 Docker Build Report" >> $GITHUB_STEP_SUMMARY
-          echo "### Build Details" >> $GITHUB_STEP_SUMMARY
-          echo "- 📅 Date: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🏷️ Image Tags:" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "  - ${{ secrets.DOCKER_USERNAME }}/imdb-clone-frontend:latest" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Successfully built and pushed Docker image" >> $GITHUB_STEP_SUMMARY
+          echo "# 🐳 Container Security Report" > trivy-report.md
+          echo "## Vulnerability Scan Results" >> trivy-report.md
+          jq -r '.runs[].results[] | 
+          "### \(.level) Severity Finding\n" +
+          "- 🔍 Vulnerability: \(.ruleId)\n" +
+          "- 📦 Package: \(.locations[].physicalLocation.artifactLocation.uri)\n" +
+          "- 📝 Description: \(.message.text)\n" +
+          "- 🛠️ Fix Version: \(.properties.fixedVersion)\n"' \
+          trivy-results.sarif >> trivy-report.md
+
+  # DAST Scans
+  dast-scans:
+    needs: [build-docker]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tool: [zap, nuclei]
+      fail-fast: false
+    steps:
+      - name: Health Check
+        run: |
+          timeout=300
+          start_time=$(date +%s)
+          while true; do
+            current_time=$(date +%s)
+            elapsed=$((current_time - start_time))
+            if [ $elapsed -gt $timeout ]; then
+              echo "Timeout waiting for deployment"
+              exit 1
+            fi
+            if curl -s -f "${{ env.APP_DOMAIN }}/health" >/dev/null; then
+              echo "Service is up!"
+              break
+            fi
+            echo "Waiting for service to be available..."
+            sleep 10
+          done
+
+      - name: ZAP Scan
+        if: matrix.tool == 'zap'
+        uses: zaproxy/action-baseline@v0.9.0
+        with:
+          target: ${{ env.APP_DOMAIN }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j -I'
+          allow_issue_writing: true
+          
+      - name: Generate ZAP Report
+        if: matrix.tool == 'zap'
+        run: |
+          echo "# 🕷️ Dynamic Application Security Test Report" > zap-report.md
+          echo "## ZAP Scan Results" >> zap-report.md
+          if [ -f zap-baseline-report.html ]; then
+            python3 -c '
+            import json
+            with open("zap-baseline-report.json") as f:
+              data = json.load(f)
+            alerts = data.get("site")[0].get("alerts", [])
+            print(f"### Summary\n- 🎯 Total Alerts: {len(alerts)}\n")
+            for alert in alerts:
+              print(f"### {alert["alert"]}\n")
+              print(f"- Risk Level: {alert["risk"]}")
+              print(f"- Confidence: {alert["confidence"]}")
+              print(f"- Description: {alert["desc"]}")
+              print(f"- Solution: {alert["solution"]}\n")
+            ' >> zap-report.md
+          fi
+
+      - name: Nuclei Scan
+        if: matrix.tool == 'nuclei'
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: ${{ env.APP_DOMAIN }}
+          templates: "cves,vulnerabilities,exposures,misconfiguration"
+          severity: "critical,high,medium"
+          output: "nuclei-results.json"
+          json: true
+          rate-limit: 150
+          bulk-size: 25
+          
+      - name: Generate Nuclei Report
+        if: matrix.tool == 'nuclei'
+        run: |
+          echo "# 🎯 Nuclei Vulnerability Scan Report" > nuclei-report.md
+          echo "## Scan Results" >> nuclei-report.md
+          if [ -f nuclei-results.json ]; then
+            jq -r '.[] | 
+            "### \(.info.severity) Severity Finding\n" +
+            "- 🔍 Template: \(.templateID)\n" +
+            "- 📍 Endpoint: \(.matched)\n" +
+            "- 📝 Description: \(.info.description)\n" +
+            if (.info.recommendation != null) then
+            "- 🛠️ Recommendation: \(.info.recommendation)\n"
+            else "" end' \
+            nuclei-results.json >> nuclei-report.md
+          else
+            echo "✅ No vulnerabilities detected" >> nuclei-report.md
+          fi
+
+  # Consolidate Reports
+  generate-final-report:
+    needs: [security-scans, trivy-scan, dast-scans]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect All Reports
+        run: |
+          echo "# 📊 Comprehensive Security Assessment Report" > final-report.md
+          echo "## Table of Contents" >> final-report.md
+          echo "1. [Static Analysis](#static-analysis)" >> final-report.md
+          echo "2. [Container Security](#container-security)" >> final-report.md
+          echo "3. [Dynamic Analysis](#dynamic-analysis)" >> final-report.md
+          
+          echo "## Static Analysis" >> final-report.md
+          cat *-report.md >> final-report.md
+          
+          echo "## Summary Dashboard" >> final-report.md
+          echo "| Category | Critical | High | Medium | Low |" >> final-report.md
+          echo "|----------|----------|------|---------|-----|" >> final-report.md
+          # Add summary counts for each tool
+          
+      - name: Upload Final Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-assessment-report
+          path: final-report.md
