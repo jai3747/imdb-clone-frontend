@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -74,14 +74,16 @@ jobs:
           echo "## Risk Dashboard" >> semgrep-report.md
           echo "| Severity | Count | Status |" >> semgrep-report.md
           echo "|----------|--------|--------|" >> semgrep-report.md
-          jq -r '.runs[].results[] | .level' semgrep-results.sarif | sort | uniq -c | \
-          while read -r count level; do
-            if [ "$level" = "error" ]; then
-              echo "| Critical | $count | ❌ |" >> semgrep-report.md
-            elif [ "$level" = "warning" ]; then
-              echo "| Warning | $count | ⚠️ |" >> semgrep-report.md
-            fi
-          done
+          if [ -f semgrep-results.sarif ]; then
+            jq -r '.runs[].results[] | .level' semgrep-results.sarif | sort | uniq -c | \
+            while read -r count level; do
+              if [ "$level" = "error" ]; then
+                echo "| Critical | $count | ❌ |" >> semgrep-report.md
+              elif [ "$level" = "warning" ]; then
+                echo "| Warning | $count | ⚠️ |" >> semgrep-report.md
+              fi
+            done
+          fi
           echo "### Scan Status: ${{ steps.semgrep.outcome }}" >> semgrep-report.md
 
       # SCA - Snyk
@@ -102,14 +104,16 @@ jobs:
           echo "## Vulnerability Dashboard" >> snyk-report.md
           echo "| Severity | Count | Status |" >> snyk-report.md
           echo "|----------|--------|--------|" >> snyk-report.md
-          jq -r '.vulnerabilities | group_by(.severity)[] | {severity: .[0].severity, count: length}' snyk-results.json | \
-          while read -r severity count; do
-            if [ "$severity" = "critical" ]; then
-              echo "| Critical | $count | ❌ |" >> snyk-report.md
-            elif [ "$severity" = "high" ]; then
-              echo "| High | $count | ⚠️ |" >> snyk-report.md
-            fi
-          done
+          if [ -f snyk-results.json ]; then
+            jq -r '.vulnerabilities | group_by(.severity)[] | {severity: .[0].severity, count: length}' snyk-results.json | \
+            while read -r severity count; do
+              if [ "$severity" = "critical" ]; then
+                echo "| Critical | $count | ❌ |" >> snyk-report.md
+              elif [ "$severity" = "high" ]; then
+                echo "| High | $count | ⚠️ |" >> snyk-report.md
+              fi
+            done
+          fi
           echo "### Scan Status: ${{ steps.snyk.outcome }}" >> snyk-report.md
 
       # IaC - Checkov
@@ -132,10 +136,12 @@ jobs:
           echo "## Configuration Risk Dashboard" >> checkov-report.md
           echo "| Category | Failed Checks | Status |" >> checkov-report.md
           echo "|----------|---------------|--------|" >> checkov-report.md
-          jq -r '.runs[].results[] | .ruleId' checkov-results.sarif | cut -d'/' -f1 | sort | uniq -c | \
-          while read -r count category; do
-            echo "| $category | $count | ⚠️ |" >> checkov-report.md
-          done
+          if [ -f checkov-results.sarif ]; then
+            jq -r '.runs[].results[] | .ruleId' checkov-results.sarif | cut -d'/' -f1 | sort | uniq -c | \
+            while read -r count category; do
+              echo "| $category | $count | ⚠️ |" >> checkov-report.md
+            done
+          fi
           echo "### Scan Status: ${{ steps.checkov.outcome }}" >> checkov-report.md
 
       # DAST Scans
@@ -240,11 +246,12 @@ jobs:
       # Upload Individual Reports as Artifacts
       - name: Upload Scan Reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scan }}-report
           path: ${{ matrix.scan }}-report.md
-          if-no-files-found: ignore
+          if-no-files-found: warn
+          retention-days: 90
 
   # Build and Push Docker Image
   build-docker:
@@ -254,19 +261,19 @@ jobs:
       image_tag: ${{ github.sha }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to DockerHub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and Push
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
@@ -297,24 +304,27 @@ jobs:
           echo "## Vulnerability Dashboard" >> trivy-report.md
           echo "| Severity | Count | Status |" >> trivy-report.md
           echo "|----------|--------|--------|" >> trivy-report.md
-          jq -r '.runs[].results[] | .level' trivy-results.sarif | sort | uniq -c | \
-          while read -r count level; do
-            case "$level" in
-              "error")
-                echo "| Critical | $count | ❌ |" >> trivy-report.md
-                ;;
-              "warning")
-                echo "| High | $count | ⚠️ |" >> trivy-report.md
-                ;;
-            esac
-          done
+          if [ -f trivy-results.sarif ]; then
+            jq -r '.runs[].results[] | .level' trivy-results.sarif | sort | uniq -c | \
+            while read -r count level; do
+              case "$level" in
+                "error")
+                  echo "| Critical | $count | ❌ |" >> trivy-report.md
+                  ;;
+                "warning")
+                  echo "| High | $count | ⚠️ |" >> trivy-report.md
+                  ;;
+              esac
+            done
+          fi
           echo "### Scan Status: ${{ steps.trivy.outcome }}" >> trivy-report.md
 
       - name: Upload Trivy Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: trivy-report.md
+          retention-days: 90
 
   # Final Report Generation
   generate-final-report:
@@ -323,7 +333,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download All Reports
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-report'
+          merge-multiple: true
 
       - name: Consolidate Reports
         run: |
@@ -334,17 +347,11 @@ jobs:
           echo "|-------------------|----------|------|--------|--------|" >> final-report.md
           
           # Add individual reports
-          for report in */*-report.md; do
+          for report in *-report.md; do
             echo "---" >> final-report.md
             cat "$report" >> final-report.md
           done
           
           # Add timestamp
           echo "---" >> final-report.md
-          echo "Report generated at: $(date)" >> final-report.md
-
-      - name: Upload Final Report
-        uses: actions/upload-artifact@v3
-        with:
-          name: security-assessment-report
-          path: final-report.md
+          echo "Report generated at: $(date)"
